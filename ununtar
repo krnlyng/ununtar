@@ -1,0 +1,321 @@
+#!/bin/sh
+
+#   ununtar - undo an extract operation
+#   Copyright (C) 2015 Franz-Josef Haider
+#
+#   This program is free software: you can redistribute it and/or modify
+#   it under the terms of the GNU General Public License as published by
+#   the Free Software Foundation, either version 3 of the License, or
+#   (at your option) any later version.
+#
+#   This program is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+silent=0
+untardir=.
+remove_empty_dirs=1
+reinstall_packages=1
+package_manager=pacman
+archive=
+
+known_package_managers="pacman apt-get zypper yum"
+
+eos()
+{
+    if [ "$silent" != 1 ]; then
+        printf "%s\n" "$1"
+    fi
+}
+
+eosW()
+{
+    eos "WARNING: $1"
+}
+
+eosE()
+{
+    eos "ERROR: $1"
+}
+
+e()
+{
+    printf "%s\n" "$1"
+}
+
+usage()
+{
+    printf "usage:\n"
+    printf "$0 [OPTIONS] tarfile\n"
+    printf "explanation of arguments:\n"
+    printf "\ttarfile file to ununtar\n"
+    printf "options can be one or more of:\n"
+    printf " -s|--silent:\n"
+    printf "\tprint no warnings.\n"
+    printf " -d DIRECTORY|--directory DIRECTORY:\n"
+    printf "\t$0 will operate on DIRECTORY if specified, otherwise on .\n"
+    printf " -k|--keep-empty-directories:\n"
+    printf "\tif specified $0 will keep empty directories (probably not what you want)\n"
+    printf " -nrp|--no-reinstall-packages:\n"
+    printf "\tdo not try to reinstall packages of possibly overwritten files.\n"
+    printf " -p PACKAGE_MANAGER|--package-manager PACKAGE_MANAGER:\n"
+    printf "\tuse PACKAGE_MANAGER to reinstall packages instead of trying to figure out which package manager to use.\n"
+    printf " -h|--help:\n"
+    printf "\tprint usage (this) and exit.\n"
+}
+
+parse_args()
+{
+    while [[ $# > 0 ]];
+    do
+        arg="$1"
+
+        case "$arg" in
+            -s|--silent)
+                silent=1
+            ;;
+            -d|--directory)
+                untardir=$2
+                shift
+            ;;
+            -k|--keep-empty-directories)
+                remove_empty_dirs=0
+            ;;
+            -nrp|--no-reinstall-packages)
+                reinstall_packages=0
+            ;;
+            -p|--package-manager)
+                package_manager=$2
+                shift
+            ;;
+            -h|--help)
+                usage
+                exit 0
+            ;;
+            *)
+                archive=$1
+            ;;
+        esac
+        shift
+    done
+}
+
+figure_out_package_manager()
+{
+    for pm in $known_package_managers;
+    do
+        if [ "`which $pm 2>/dev/null`" != "" ]; then
+            package_manager=$pm
+            break
+        fi
+    done
+}
+
+check_vars()
+{
+    if [ "$archive" = "" ]; then
+        eosE "no archive specified, use -h for help."
+        return 1
+    fi
+
+    if [ "$reinstall_packages" != 0 ]; then
+        good_pm=0
+        for pm in $known_package_managers;
+        do
+            if [ "$pm" == "$package_manager" ]; then
+                good_pm=1
+            fi
+        done
+
+        if [ ! good_pm ]; then
+            eosE "package manager $package_manager is not known to this script."
+            eos "You have to update this script to support your package manager,"
+            eos "or use -nrp if you don't need to reinstall packages."
+            return 1
+        fi
+
+         if [ "$(which $package_manager 2>/dev/null)" = "" ]; then
+            eosE "package manager $package_manager not found."
+            eos "Use -nrp if you don't need to reinstall packages."
+            return 1
+        fi
+
+        if [ "$package_manager" = "apt-get" ]; then
+            if [ "$(which apt-file 2>/dev/null)" = "" ]; then
+                eosE "package manager apt-get was selected but apt-file was not found."
+                eos "Install it or use -nrp if you don't need to reinstall packages."
+                return 1
+            fi
+
+            cont=n
+            eosW "Be sure to run apt-file update before using this script."
+            eos "Enter c to continue anything else to abort."
+            read cont
+            if [ "$cont" != "c" ]; then
+                return 1
+            fi
+        fi
+    fi
+}
+
+
+# this function is very ugly...
+list_contents()
+{
+    if [[ $1 == *.zip ]]; then
+        zipfiles=`unzip -l $1 | sed '1d;2d;3d;$d' | sed '$d' | awk '{ print $4 }'`
+        for f in $zipfiles;
+        do
+            echo $f
+            echo $(dirname $f)
+        done
+    elif [[ $1 == *.rar ]]; then
+        rarfiles=`unrar -l $1 | sed '1d;2d;3d;4d;5d;6d;7d;8d;$d' | sed '$d' | sed '$d'`
+        for f in $rarfiles;
+        do
+            echo $f
+            echo $(dirname $f)
+        done
+# TODO
+#    elif [[ $1 == *.7z ]]; then
+#        7zfiles=`7z l $1 | sed '1d;2d;3d;4d;5d;6d;7d;8d;9d;10d;11d;12d;13d;14d;15d;16d;17d;$d' | sed '$d' | sed '$d'` | awk '{ print $6 }'
+#        for f in $7zfiles;
+#        do
+#            echo $f
+#            echo $(dirname $f)
+#        done
+    else
+        tar -tf $1
+    fi
+}
+
+is_dir_empty()
+{
+    if [[ "$(ls -1 $1 2>/dev/null | wc -l)" = 0 ]]; then
+        return 0
+    fi
+
+    return 1
+}
+
+sort_by_length()
+{
+    echo $1 | tr " " "\n" | awk '{ print length($0) " " $0; }' | sort -nr | cut -d' ' -f 2- | tr "\n" " "
+}
+
+get_package()
+{
+    if [ "$package_manager" = "pacman" ]; then
+        if [ "$silent" != 0 ]; then
+            pacman -Qo $1 | awk '{ print $5 }'
+        else
+            pacman -Qo $1 2>/dev/null | awk '{ print $5 }'
+        fi
+    elif [ "$package_manager" = "apt-get" ]; then
+        if [ "$silent" != 0 ]; then
+            apt-file search $1 2>/dev/null | awk '{ print $1 }' | sed 's/:$//g'
+        else
+            apt-file search $1 | awk '{ print $1 }' | sed 's/:$//g'
+        fi
+    elif [ "$package_manager" = "zypper" ]; then
+        if [ "$silent" != 0 ]; then
+            rpm -qf $1 2>/dev/null
+        else
+            rpm -qf $1
+        fi
+    elif [ "$package_manager" = "yum" ]; then
+        if [ "$silent" != 0 ]; then
+            rpm -qf $1 2>/dev/null
+        else
+            rpm -qf $1
+        fi
+    fi
+}
+
+reinstall_packages()
+{
+    if [ "$package_manager" = "pacman" ]; then
+        pacman -S $1
+    elif [ "$package_manager" = "apt-get" ]; then
+        apt-get install --reinstall $1
+    elif [ "$package_manager" = "zypper" ]; then
+        zypper in -f $1
+    elif [ "$package_manager" = "yum" ]; then
+        e "package manager yum is untested."
+        e "The following two commands will be executed:"
+        e " rpm -e --justdb --nodeps $1 # make yum think the package is not installed."
+        e " yum install $1              # reinstall the package"
+        e "To continue enter c, anything else to skip."
+        cont=n
+        read cont
+        if [ "$cont" = c ]; then
+            rpm -e --justdb --nodeps $1
+            yum install $1
+        fi
+    fi
+}
+
+# begin
+
+if ! parse_args $@; then
+    usage
+    exit 1
+fi
+
+if [ "$package_manager" = "" ]; then
+    figure_out_package_manager
+fi
+
+if ! check_vars; then
+    exit 2
+fi
+
+files=
+directories=
+items=$(list_contents $archive)
+for item in $items;
+do
+    if [[ -d $untardir/$item ]]; then
+        directories="$directories $untardir/$item"
+    elif [[ -f $untardir/$item ]]; then
+        files="$files $untardir/$item"
+    else
+        eosW "$untardir/$item does not exist, ignoring."
+    fi
+done
+
+# get packages and remove files
+packages=
+for file in $files;
+do
+    if [ "$reinstall_packages" != 0 ]; then
+        package=$(get_package $file)
+        if [ "$package" != "" ]; then
+            packages="$packages $package"
+        fi
+    fi
+    rm -f $file
+done
+
+directories=$(sort_by_length "$directories")
+
+if [ "$remove_empty_dirs" = 1 ]; then
+    for directory in $directories;
+    do
+        if is_dir_empty $directory; then
+            rmdir $directory
+        fi
+    done
+fi
+
+if [ "$reinstall_packages" != 0 ]; then
+    if [ "$packages" != "" ]; then
+        eos "reinstalling packages:$packages"
+        reinstall_packages "$packages"
+    fi
+fi
+
