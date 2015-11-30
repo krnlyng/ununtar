@@ -166,28 +166,28 @@ check_vars()
 # this function is very ugly...
 list_contents()
 {
+    # in zip, rar and 7z: TODO: spaces in filenames...
     if [[ $1 == *.zip ]]; then
-        zipfiles=`unzip -l $1 | sed '1d;2d;3d;$d' | sed '$d' | awk '{ print $4 }'`
+        zipfiles=`unzip -l $1 | sed '1d;2d;3d;$d' | sed '$d' | awk '{ print $NF }'`
         for f in $zipfiles;
         do
             echo $f
             echo $(dirname $f)
         done
     elif [[ $1 == *.rar ]]; then
-        rarfiles=`unrar -l $1 | sed '1d;2d;3d;4d;5d;6d;7d;8d;$d' | sed '$d' | sed '$d'`
+        rarfiles=`unrar -l $1 | sed '1d;2d;3d;4d;5d;6d;7d;8d;$d' | sed '$d' | sed '$d' | awk '{ print $NF }'`
         for f in $rarfiles;
         do
             echo $f
             echo $(dirname $f)
         done
-# TODO
-#    elif [[ $1 == *.7z ]]; then
-#        7zfiles=`7z l $1 | sed '1d;2d;3d;4d;5d;6d;7d;8d;9d;10d;11d;12d;13d;14d;15d;16d;17d;$d' | sed '$d' | sed '$d'` | awk '{ print $6 }'
-#        for f in $7zfiles;
-#        do
-#            echo $f
-#            echo $(dirname $f)
-#        done
+    elif [[ $1 == *.7z ]]; then
+        7zfiles=`7z l $1 | sed '1d;2d;3d;4d;5d;6d;7d;8d;9d;10d;11d;12d;13d;14d;15d;16d;17d;$d' | sed '$d' | awk '{ print $NF }'`
+        for f in $7zfiles;
+        do
+            echo $f
+            echo $(dirname $f)
+        done
     else
         tar -tf $1
     fi
